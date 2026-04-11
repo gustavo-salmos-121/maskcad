@@ -6,5 +6,5 @@ import react from '@vitejs/plugin-react'
 // For custom domain or root pages, use '/'
 export default defineConfig({
   plugins: [react()],
-
+  base: '/maskcad/',
 })

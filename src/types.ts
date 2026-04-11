@@ -1,5 +1,5 @@
-export interface RectShape { id: number; type: 'rect'; x: number; y: number; w: number; h: number; layer: number; }
-export interface CircleShape { id: number; type: 'circle'; cx: number; cy: number; r: number; layer: number; }
+export interface RectShape { id: number; type: 'rect'; x: number; y: number; w: number; h: number; layer: number; groupId?: number; }
+export interface CircleShape { id: number; type: 'circle'; cx: number; cy: number; r: number; layer: number; groupId?: number; }
 export type Shape = RectShape | CircleShape;
 
 export type LayerPurpose = 'generic'|'oxidation'|'metallization'|'implant'|'diffusion'|'passivation'|'contact'|'polysilicon'|'active'|'well';
@@ -26,44 +26,12 @@ export const WAFER_SIZES: WaferSize[] = [
   { label: '8″ (200 mm)', d: 200000 },
 ];
 
-/* ─── Mark system ────────────────────────────────── */
-// Hierarchy (inside → outside):
-//   1. Device area (deviceW × deviceH) — mask geometry lives here
-//   2. Die outline — rectangle frame AROUND device, at `outline.margin` µm from device edge
-//   3. Die marks — placed OUTSIDE outline, at `dieMarks.offset` µm from outline edge
-// Total die footprint = device + 2*(outline.margin + dieMarks.offset + dieMarks.size/2)
-
-export interface DieOutlineConfig {
-  enabled: boolean;
-  width: number;        // line thickness (µm)
-  margin: number;       // gap between device edge and outline inner edge (µm)
-}
-
+export interface DieOutlineConfig { enabled: boolean; width: number; margin: number; }
 export type DieMarkPosition = 'corners' | 'edges' | 'corners+edges';
-
-export interface DieMarksConfig {
-  enabled: boolean;
-  style: AlignMarkStyle;
-  size: number;         // mark size (µm)
-  offset: number;       // gap from outline outer edge (or device edge if no outline) to mark center (µm)
-  positions: DieMarkPosition;
-}
-
+export interface DieMarksConfig { enabled: boolean; style: AlignMarkStyle; size: number; offset: number; positions: DieMarkPosition; }
 export type WaferMarkPlacement = 'auto4' | 'auto8' | 'manual';
-
-export interface WaferMarksConfig {
-  enabled: boolean;
-  style: AlignMarkStyle;
-  size: number;
-  placement: WaferMarkPlacement;
-  radiusFraction: number;
-}
-
-export interface MarksConfig {
-  wafer: WaferMarksConfig;
-  die: DieMarksConfig;
-  outline: DieOutlineConfig;
-}
+export interface WaferMarksConfig { enabled: boolean; style: AlignMarkStyle; size: number; placement: WaferMarkPlacement; radiusFraction: number; }
+export interface MarksConfig { wafer: WaferMarksConfig; die: DieMarksConfig; outline: DieOutlineConfig; }
 
 export const DEFAULT_MARKS: MarksConfig = {
   wafer: { enabled: true, style: 'cross', size: 500, placement: 'auto4', radiusFraction: 0.85 },
@@ -71,24 +39,42 @@ export const DEFAULT_MARKS: MarksConfig = {
   outline: { enabled: true, width: 3, margin: 10 },
 };
 
-/** Calculate total padding around device area for die footprint.
- *  This is the maximum extent from device edge outward that any element reaches.
- *  Layout (inside→out): device edge → [margin] → outline → [offset] → mark center ± size/2
- */
 export function calcDiePadding(marks: MarksConfig): number {
-  // Outline outer edge distance from device edge
-  const outlineOuter = marks.outline.enabled
-    ? marks.outline.margin + marks.outline.width
-    : 0;
-
-  // Mark outer edge distance from device edge
-  // Marks sit outside the outline (or outside device if no outline)
-  const markOuter = marks.die.enabled
-    ? outlineOuter + marks.die.offset + marks.die.size / 2
-    : 0;
-
-  // Return whichever reaches further
+  const outlineOuter = marks.outline.enabled ? marks.outline.margin + marks.outline.width : 0;
+  const markOuter = marks.die.enabled ? outlineOuter + marks.die.offset + marks.die.size / 2 : 0;
   return Math.max(outlineOuter, markOuter);
+}
+
+/* ─── Group helpers ──────────────────────────────── */
+export function getGroupBounds(shapes: Shape[], ids: number[]): { cx: number; cy: number; minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  shapes.filter(s => ids.includes(s.id)).forEach(s => {
+    if (s.type === 'rect') {
+      minX = Math.min(minX, s.x); minY = Math.min(minY, s.y);
+      maxX = Math.max(maxX, s.x + s.w); maxY = Math.max(maxY, s.y + s.h);
+    } else {
+      minX = Math.min(minX, s.cx - s.r); minY = Math.min(minY, s.cy - s.r);
+      maxX = Math.max(maxX, s.cx + s.r); maxY = Math.max(maxY, s.cy + s.r);
+    }
+  });
+  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, minX, minY, maxX, maxY };
+}
+
+export function scaleShapes(shapes: Shape[], ids: number[], factor: number): Shape[] {
+  const bounds = getGroupBounds(shapes, ids);
+  return shapes.map(s => {
+    if (!ids.includes(s.id)) return s;
+    if (s.type === 'rect') {
+      const newW = s.w * factor, newH = s.h * factor;
+      const newX = bounds.cx + (s.x - bounds.cx) * factor;
+      const newY = bounds.cy + (s.y - bounds.cy) * factor;
+      return { ...s, x: newX, y: newY, w: newW, h: newH };
+    } else {
+      const newCx = bounds.cx + (s.cx - bounds.cx) * factor;
+      const newCy = bounds.cy + (s.cy - bounds.cy) * factor;
+      return { ...s, cx: newCx, cy: newCy, r: s.r * factor };
+    }
+  });
 }
 
 /* ─── Project & History ──────────────────────────── */
